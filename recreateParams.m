@@ -19,7 +19,7 @@ function [pa, trialLevelMatrix] = recreateParams(PDS)
     initial=params(PDS.initialParameters(preLevels),PDS.initialParameterNames(preLevels));
     initial=initial.mergeToSingleStruct;
 
-    if ~isfield(d,'analysis')
+    if ~isfield(PDS,'analysis')
         PDS.analysis=cell(size(PDS.data));
     end
 

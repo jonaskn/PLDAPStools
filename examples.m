@@ -8,3 +8,6 @@ load test.PDS -mat
 %select the parameters that where valid after a trial:
 iTrial=1;
 pa.setLevels(trialLevelMatrix(:,iTrial));
+
+%get the flip times of the first trial
+flipTimes=pa.timing.flipTimes;

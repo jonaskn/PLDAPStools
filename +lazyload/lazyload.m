@@ -20,7 +20,7 @@
 % fliptimes=l.PDS.data{:}.timing.flipTimes(1,:); %a bit slow
 % trstart=l.PDS.data{:}.trstart; %fast
 %
-%% written by Jonas Knöll 2015
+%% written by Jonas Kn?ll 2015
 classdef lazyload % <handle
     properties (Hidden = true)
         filename
@@ -28,6 +28,8 @@ classdef lazyload % <handle
         rootFields={};
         
         uberInfo
+        
+        referenceLoadMethod=2;%1:H5R.getname, 2:H5R.create, 3:guess
 
 %         laziness = 2; % 1 (default): load full tree
 %                       % 2 (don't dereference unless it has been requested)
@@ -64,7 +66,7 @@ classdef lazyload % <handle
     
 	methods (Hidden = true)
 
-        function l=lazyload(filename,location,info,uberInfo,root)           
+        function l=lazyload(filename,location,info,uberInfo,root,referenceLoadMethod)           
             if nargin <2
                 location='/';
             end
@@ -74,7 +76,7 @@ classdef lazyload % <handle
             else
                l.uberInfo = uberInfo;
             end
-            
+                      
             if nargin<3 || isempty(info)
                 if strcmp(location,'/')
                     info=getData(l.uberInfo);
@@ -86,12 +88,44 @@ classdef lazyload % <handle
             if nargin >4
                 l.root=root;
             end
+            
+            if nargin >5
+                l.referenceLoadMethod=referenceLoadMethod;
+            end
+            
+            if l.referenceLoadMethod==2
+            %%later we will do this on initialization
+               uI = getData(l.uberInfo);
+               if ~isfield(uI,'refNames')
+                   refGroup=uI.Groups(strcmp('/#refs#',{uI.Groups.Name}));
+                   names=[];
+                   if ~isempty(refGroup.Datasets)
+                       names={refGroup.Datasets.Name};
+                       names=cellfun(@(x) ['/#refs#/' x], names,'UniformOutput',false);
+                   end
+                   if ~isempty(refGroup.Groups)
+                        names=[names {refGroup.Groups.Name}];
+                   end
+                    
+                   fid=H5F.open(filename);
+                   a=zeros(8,length(names));
+                   for iName=1:length(names)
+                       a(:,iName)=H5R.create(fid,names{iName},'H5R_OBJECT',-1);
+                   end
+                   H5F.close(fid);
+                   l.uberInfo.refNames=names;
+                   l.uberInfo.refData=double(a);
+               end
+            end
+            
  
             if isfield(info,'Groups') && ~isempty(info.Groups)
                 groupNames={info.Groups.Name};
                 for iName=1:length(groupNames)
-                    splName=strsplit(groupNames{iName},'/');
-                    groupNames{iName}=splName{end};
+                    fin=(strfind(groupNames{iName}, '/'));fin=fin(end);
+                    groupNames{iName}=groupNames{iName}(fin+1:end);
+%                     splName=strsplit(groupNames{iName},'/');
+%                     groupNames{iName}=splName{end};
                 end
                  groupNames(~cellfun(@isempty,strfind(groupNames,'#')))=[];
             else
@@ -218,18 +252,52 @@ classdef lazyload % <handle
                                     end
                                     
                                     if isempty(infos{iLocation}.Filters)
-                                        infos{iLocation}.Filters=cell(1,prod(sz));
+                                        if l.referenceLoadMethod==2
+                                            infos{iLocation}.Filters = getReferenceFast(l,l.filename,locations{iLocation},1:prod(sz));
+                                            tmpS=subs{iLocation};
+                                            tmpS(end+1).type='.';
+                                            tmpS(end).subs='Filters';
+                                            l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{iLocation}.Filters);
+                                        elseif l.referenceLoadMethod==3
+                                            infos{iLocation}.Filters= guessReference(l,l.filename,locations{iLocation},1:prod(sz));
+                                            tmpS=subs{iLocation};
+                                            tmpS(end+1).type='.';
+                                            tmpS(end).subs='Filters';
+                                            l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{iLocation}.Filters);
+                                        else
+                                            infos{iLocation}.Filters=cell(1,prod(sz));
+                                        end
+                                        
                                     end
-                                    preLoaded=~cellfun(@isempty,infos{iLocation}.Filters);
-                                    loadRefs=intersect(find(~preLoaded),theseInds);
-                                    infos{iLocation}.Filters(loadRefs) = (getReference(l,l.filename,locations{iLocation},loadRefs));
                                     
-                                    if ~isempty(loadRefs)
-                                        tmpS=subs{iLocation};
-                                        tmpS(end+1).type='.';
-                                        tmpS(end).subs='Filters';
-                                        l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{iLocation}.Filters);
+                                    if l.referenceLoadMethod==1
+                                        preLoaded=~cellfun(@isempty,infos{iLocation}.Filters);
+                                        loadRefs=intersect(find(~preLoaded),theseInds);
+                                        infos{iLocation}.Filters(loadRefs) = (getReference(l,l.filename,locations{iLocation},loadRefs));
+                                        
+                                        if ~isempty(loadRefs)
+                                            tmpS=subs{iLocation};
+                                            tmpS(end+1).type='.';
+                                            tmpS(end).subs='Filters';
+                                            l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{iLocation}.Filters);
+                                        end
                                     end
+%                                     if ~isempty(loadRefs)
+%                                         tic;
+%                                         ref = guessReference(l,infos{iLocation}.Filters{loadRefs(1)},loadRefs(1),loadRefs);
+%                                         toc
+%                                         if ~all(cellfun(@(x,y) strcmp(x,y),ref, infos{iLocation}.Filters(loadRefs)' ))
+%                                            warning('found not monotonically increasing references...') 
+%                                         end
+%                                         
+%                                         tic;
+%                                         ref = guessOrGetReference(l,l.filename,locations{iLocation},loadRefs);
+%                                         toc
+%                                         if ~all(cellfun(@(x,y) strcmp(x,y),ref, infos{iLocation}.Filters(loadRefs) ))
+%                                            warning('guessOrGetReference failed.....') 
+%                                         end
+%                                     end
+
 
                                     nextLocations(end+1:end+length(theseInds)) = infos{iLocation}.Filters(theseInds);
                                     for iNextLocation=1:length(nextLocations)
@@ -269,19 +337,19 @@ classdef lazyload % <handle
                             %%use index 1
                            if isfield(infos{1},'Datatype') && strcmp(infos{1}.Datatype.Class,'H5T_REFERENCE') %if this is a cell array
                                sz=infos{1}.Dataspace.Size; 
-                               if ~isfield(infos{1}, 'Filters') || isempty(infos{1}.Filters) || all(cellfun(@isempty,infos{1}.Filters))
-                                   infos{1}.Filters=cell(1,prod(sz));
-                                   %get one
-                                   infos{1}.Filters(1) = (getReference(l,l.filename,locations{1},1));
-
-                                   tmpS=subs{1};
-                                   tmpS(end+1).type='.';
-                                   tmpS(end).subs='Filters';
-                                   l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{1}.Filters);
-                               end
-                               preLoaded=find(~cellfun(@isempty,infos{1}.Filters),1,'first');
+%                                if ~isfield(infos{1}, 'Filters') || isempty(infos{1}.Filters) || all(cellfun(@isempty,infos{1}.Filters))
+%                                    infos{1}.Filters=cell(1,prod(sz));
+%                                    %get one
+%                                    infos{1}.Filters(1) = (getReference(l,l.filename,locations{1},1));
+% 
+%                                    tmpS=subs{1};
+%                                    tmpS(end+1).type='.';
+%                                    tmpS(end).subs='Filters';
+%                                    l.uberInfo = subsasgn(l.uberInfo,tmpS,infos{1}.Filters);
+%                                end
+%                                preLoaded=find(~cellfun(@isempty,infos{1}.Filters),1,'first');
                                %check if this leads to a data field
-                               testInfo=getSubInfo(l,uI,infos{1}.Filters{preLoaded});%getSubInfo(l,infos{1},thisS.subs, infos{1}.Filters(preLoaded));
+%                                testInfo=getSubInfo(l,uI,infos{1}.Filters{preLoaded});%getSubInfo(l,infos{1},thisS.subs, infos{1}.Filters(preLoaded));
                                %it's a data leaf
 %                                if isfield(testInfo,'Datatype') && ~strcmp(testInfo.Datatype.Class,'H5T_REFERENCE')
                                    S(end+1).type='{}';
@@ -333,6 +401,47 @@ classdef lazyload % <handle
             end
         end
         
+        function ref = getReferenceFast(l,filename,location,inds)
+           plist = 'H5P_DEFAULT';
+           space = 'H5S_ALL';
+           fid=H5F.open(filename);
+           
+           %%later we will do this on initialization
+           uI = getData(l.uberInfo);
+           names=uI.refNames;
+           a=uI.refData;
+%            refGroup=uI.Groups(strcmp('/#refs#',{uI.Groups.Name}));
+%            names={refGroup.Datasets.Name};
+%            names=cellfun(@(x) ['/#refs#/' x], names,'UniformOutput',false);
+%            names=[names {refGroup.Groups.Name}];
+%            for iName=1:length(names)
+%                a(:,iName)=H5R.create(fid,names{iName},'H5R_OBJECT',-1);
+%            end
+% %            
+%            
+%            for iName=1:length(names2)
+%                b(:,iName)=H5R.create(fid,names2{iName},'H5R_OBJECT',-1);
+%            end
+%            
+%            
+%            a=[a b];
+           
+           multiplyers=256.^(0:7);
+           
+           did=H5D.open(fid,location);
+%            ref=cell(1,length(inds));%cell(info.Dataspace.Size);
+           ref_ind=ones(1,length(inds));%cell(info.Dataspace.Size);
+           refdata = H5D.read(did,'H5T_STD_REF_OBJ',space,space,plist);
+           for iRef=1:length(inds)
+%                ref{iRef}=H5R.get_name(did,'H5R_OBJECT',refdata(:,inds(iRef)));
+                ref_ind(iRef)=find( multiplyers*double(refdata(:,inds(iRef)))==multiplyers*double(a) );
+           end
+           
+           ref=names(ref_ind);
+           H5D.close(did);
+           H5F.close(fid);
+        end
+        
         function ref = getReference(l,filename,location,inds)
            plist = 'H5P_DEFAULT';
            space = 'H5S_ALL';
@@ -345,6 +454,35 @@ classdef lazyload % <handle
            end
            H5D.close(did);
            H5F.close(fid);
+        end
+        
+        function ref = guessReference(l,reference,reference_ind,inds)
+                %first get the reference number
+                baseDictchar = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+%                 reference='cd';
+                ref_num=1;
+                reference=reference(9:end);
+                for iN=1:length(reference)
+                    ref_num=ref_num+((find(baseDictchar==reference(iN))-1)*62^(iN-1));
+                end
+                
+                %now calculate references relative to that
+                get_nums_10=ref_num-reference_ind+inds;
+                %%go from number to 62 based char
+                %'a' is zero, '0' is 61
+                nNumbers=max(ceil(log(get_nums_10)/log(62)));
+                get_nums_62=zeros(length(get_nums_10),nNumbers);
+                get_nums_10=reshape(get_nums_10, length(get_nums_10),1);
+                for iN=nNumbers:-1:1
+                    get_nums_62(:,iN)=floor((get_nums_10-1)/62^(iN-1));
+                    get_nums_10=get_nums_10-get_nums_62(:,iN)*62^(iN-1);
+                end
+                get_nums_62=get_nums_62+1;
+                ref=reshape(baseDictchar(get_nums_62),size(get_nums_62));
+                ref=num2cell(ref,2);
+                %remove trailing zero (a)
+                ref(all(get_nums_62(:,2:end)==1,2))=cellfun(@(x) x(1), ref(all(get_nums_62(:,2:end)==1,2)), 'UniformOutput', false);
+                ref = cellfun(@(x) ['/#refs#/' x],ref, 'UniformOutput',false)';
         end
 
         function [info, S]=getSubInfo(r,uberInfo,location,S)

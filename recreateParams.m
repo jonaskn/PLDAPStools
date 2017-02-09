@@ -1,4 +1,4 @@
-function [pa, trialLevelMatrix] = recreateParams(PDS)
+function [pa, trialLevelMatrix, nTrials] = recreateParams(PDS)
 
     conditionTrials=cellfun(@(x) textscan(x,'Trial%dParameters'),PDS.conditionNames);
     conditionTrials=[conditionTrials{:}];
@@ -7,6 +7,8 @@ function [pa, trialLevelMatrix] = recreateParams(PDS)
     end
 
     afterpauseparms=cellfun(@(x) textscan(x,'PauseAfterTrial%dParameters'),PDS.initialParameterNames);
+    isafterpauseparm=~cellfun(@isempty,afterpauseparms);
+    afterpauseparms(~isafterpauseparm)=cellfun(@(x) textscan(x,'experimentAfterTrials%dParameters'),PDS.initialParameterNames(~isafterpauseparm));
     isafterpauseparm=~cellfun(@isempty,afterpauseparms);
 
     %and sepereate the pre experiment levels
@@ -18,6 +20,10 @@ function [pa, trialLevelMatrix] = recreateParams(PDS)
 
     initial=params(PDS.initialParameters(preLevels),PDS.initialParameterNames(preLevels));
     initial=initial.mergeToSingleStruct;
+
+    if ~isfield(PDS,'data')
+        PDS.data=cell(size(PDS.conditions));
+    end
 
     if ~isfield(PDS,'analysis')
         PDS.analysis=cell(size(PDS.data));
@@ -41,7 +47,7 @@ function [pa, trialLevelMatrix] = recreateParams(PDS)
 %     perTrial=3;
 %     type={static,afterTrial,perTrial,perTrial,perTrial};
 
-    trialLevelMatrix=zeros(length(instructs), length(PDS.data));
+    trialLevelMatrix=false(length(instructs), length(PDS.data));
     trialLevelMatrix(1,:)=true; %static
     %missing afterpause trials
     trialLevelMatrix((2+sum(isafterpauseparm)):end,:)=[eye(length(PDS.data)); eye(length(PDS.data)); eye(length(PDS.data))];
@@ -51,3 +57,5 @@ function [pa, trialLevelMatrix] = recreateParams(PDS)
     end
 
     trialLevelMatrix=~~trialLevelMatrix;
+    nTrials=length(PDS.data);
+end
